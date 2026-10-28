@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NFC VCard Falcón</title>
+<style>
+  :root { --bg:#f6f5f2; --card:#fff; --ink:#1b1b1b; --muted:#6b6b6b; --line:#e2e0da; --accent:#0a5c4a; --warn:#b45309; --err:#b42318; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#131413; --card:#1c1d1c; --ink:#f1f1ee; --muted:#9a9a95; --line:#303230; --accent:#3fc1a0; --warn:#f0a24a; --err:#ff7b6e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:520px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  p.sub { margin:0 0 16px; color:var(--muted); font-size:.92rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  label { display:block; font-size:.82rem; color:var(--muted); margin:10px 0 4px; }
+  label:first-child { margin-top:0; }
+  input, select { width:100%; padding:12px; font-size:1rem; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--ink); }
+  input:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  button { width:100%; padding:14px; font-size:1rem; font-weight:600; border:0; border-radius:12px; background:var(--accent); color:#fff; cursor:pointer; margin-top:14px; }
+  @media (prefers-color-scheme: dark) { button { color:#0b1210; } }
+  button.secondary { background:transparent; color:var(--ink); border:1px solid var(--line); margin-top:8px; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-all; font:.8rem/1.5 ui-monospace,Menlo,Consolas,monospace; color:var(--ink); }
+  .meter { height:8px; background:var(--line); border-radius:99px; overflow:hidden; margin:8px 0 6px; }
+  .meter > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .small { font-size:.82rem; color:var(--muted); }
+  #status { padding:12px 14px; border-radius:12px; font-size:.95rem; display:none; margin-bottom:14px; }
+  #status.ok { display:block; background:color-mix(in srgb, var(--accent) 14%, transparent); border:1px solid var(--accent); }
+  #status.err { display:block; background:color-mix(in srgb, var(--err) 12%, transparent); border:1px solid var(--err); }
+  #status.info { display:block; background:var(--card); border:1px solid var(--line); }
+  #compat { display:none; padding:12px 14px; border-radius:12px; border:1px solid var(--warn); font-size:.9rem; margin-bottom:14px; }
+  .counter { text-align:right; font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>NFC VCard Falcón</h1>
+  <p class="sub">Graba un contacto (vCard) en un llavero NFC y verifícalo al instante.</p>
+
+  <div id="compat">
+    Este navegador no soporta Web NFC. Abre esta página en <b>Chrome para Android</b> con NFC activado.
+    En iPhone no se puede grabar desde el navegador.
+  </div>
+  <div id="status" role="status"></div>
+
+  <div class="card">
+    <div class="row">
+      <div><label for="nombre">Nombre</label><input id="nombre" autocomplete="off" placeholder="Juan"></div>
+      <div><label for="apellidos">Apellidos</label><input id="apellidos" autocomplete="off" placeholder="Pérez"></div>
+    </div>
+    <label for="empresa">Empresa / marca</label>
+    <input id="empresa" autocomplete="off" placeholder="Agencia">
+    <label for="cargo">Cargo</label>
+    <input id="cargo" autocomplete="off" placeholder="Asesor de ventas">
+    <label for="tel">Teléfono / WhatsApp</label>
+    <input id="tel" type="tel" inputmode="tel" autocomplete="off" placeholder="+52 81 1234 5678">
+    <label for="email">Correo</label>
+    <input id="email" type="email" inputmode="email" autocomplete="off" placeholder="juan@agencia.com">
+  </div>
+
+  <div class="card">
+    <div class="small">Vista previa de lo que se graba</div>
+    <pre id="preview"></pre>
+    <div class="meter"><div id="bar"></div></div>
+    <div class="small counter" id="bytes">0 bytes</div>
+    <div class="small" id="chipHint"></div>
+  </div>
+
+  <button id="btnWrite">Grabar en llavero</button>
+  <button id="btnRead" class="secondary">Leer llavero (verificar)</button>
+  <button id="btnClear" class="secondary">Limpiar formulario</button>
+
+  <p class="small" style="margin-top:18px">
+    Tip: al pulsar “Grabar”, acerca el llavero a la parte trasera del celular (donde está la antena NFC) y espera la confirmación sin moverlo.
+    Web NFC no puede bloquear el chip contra escritura; si quieres bloquearlo, hazlo con NFC Tools o NXP TagWriter.
+  </p>
+</main>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fields = ["nombre","apellidos","empresa","cargo","tel","email"];
+  const supported = "NDEFReader" in window;
+  if (!supported) { $("compat").style.display = "block"; $("btnWrite").disabled = true; $("btnRead").disabled = true; }
+
+  const clean = (s) => (s || "").replace(/[\r\n]+/g, " ").replace(/([,;\\])/g, "\\$1").trim();
+
+  function buildVcard() {
+    const nombre = clean($("nombre").value), ap = clean($("apellidos").value);
+    const full = [nombre, ap].filter(Boolean).join(" ");
+    const lines = ["BEGIN:VCARD", "VERSION:3.0", "N:" + ap + ";" + nombre + ";;;", "FN:" + full];
+    if ($("empresa").value.trim()) lines.push("ORG:" + clean($("empresa").value));
+    if ($("cargo").value.trim())   lines.push("TITLE:" + clean($("cargo").value));
+    if ($("tel").value.trim())     lines.push("TEL;TYPE=CELL:" + $("tel").value.replace(/[^\d+]/g, ""));
+    if ($("email").value.trim())   lines.push("EMAIL:" + $("email").value.trim());
+    lines.push("END:VCARD");
+    return lines.join("\r\n");
+  }
+
+  function setStatus(kind, msg) {
+    const el = $("status");
+    el.className = kind; el.textContent = msg;
+    if (!msg) el.className = "";
+  }
+
+  function update() {
+    const v = buildVcard();
+    $("preview").textContent = v.replace(/\r\n/g, "\n");
+    // tamaño aproximado del mensaje NDEF: vCard + mime type (10) + cabecera (~5)
+    const size = new TextEncoder().encode(v).length + 15;
+    $("bytes").textContent = size + " bytes";
+    const caps = [[144, "NTAG213"], [504, "NTAG215"], [888, "NTAG216"]];
+    const fit = caps.find(c => size <= c[0] - 8);
+    $("bar").style.width = Math.min(100, size / 504 * 100) + "%";
+    $("chipHint").textContent = fit
+      ? "Cabe en " + fit[1] + " (" + fit[0] + " bytes) o mayor."
+      : "Demasiado grande para un NTAG216. Acorta los datos.";
+    return size;
+  }
+  fields.forEach(id => $(id).addEventListener("input", update));
+  update();
+
+  $("btnWrite").addEventListener("click", async () => {
+    if (!$("nombre").value.trim() || !$("tel").value.trim()) {
+      setStatus("err", "Escribe al menos nombre y teléfono.");
+      return;
+    }
+    const size = update();
+    if (size > 880) { setStatus("err", "Los datos no caben en el chip. Acórtalos."); return; }
+    try {
+      setStatus("info", "Acerca el llavero a la parte trasera del celular…");
+      const ndef = new NDEFReader();
+      const data = new TextEncoder().encode(buildVcard());
+      await ndef.write({ records: [{ recordType: "mime", mediaType: "text/vcard", data }] }, { overwrite: true });
+      setStatus("ok", "✓ Grabado. Ahora pulsa “Leer llavero” para verificar y pruébalo con otro celular.");
+    } catch (e) {
+      setStatus("err", "No se pudo grabar: " + (e.name === "NotAllowedError" ? "permiso NFC denegado o NFC apagado." : e.message));
+    }
+  });
+
+  $("btnRead").addEventListener("click", async () => {
+    try {
+      setStatus("info", "Acerca el llavero para leerlo…");
+      const ndef = new NDEFReader();
+      const ctrl = new AbortController();
+      await ndef.scan({ signal: ctrl.signal });
+      ndef.onreadingerror = () => setStatus("err", "No se pudo leer el llavero. Reintenta.");
+      ndef.onreading = (ev) => {
+        ctrl.abort();
+        const out = [];
+        for (const r of ev.message.records) {
+          const dec = new TextDecoder(r.encoding || "utf-8");
+          out.push("[" + r.recordType + (r.mediaType ? " · " + r.mediaType : "") + "]\n" + (r.data ? dec.decode(r.data) : ""));
+        }
+        $("preview").textContent = out.join("\n\n") || "(llavero vacío)";
+        setStatus("ok", "✓ Leído (serial " + ev.serialNumber + "). Abajo está el contenido real del chip.");
+      };
+    } catch (e) {
+      setStatus("err", "No se pudo leer: " + e.message);
+    }
+  });
+
+  $("btnClear").addEventListener("click", () => {
+    fields.forEach(id => $(id).value = "");
+    setStatus("", ""); update();
+  });
+})();
+</script>
+</body>
+</html>
