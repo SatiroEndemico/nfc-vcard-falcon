@@ -14,6 +14,18 @@
   main { max-width:520px; margin:0 auto; padding:20px 16px 48px; }
   h1 { font-size:1.3rem; margin:0 0 4px; }
   p.sub { margin:0 0 16px; color:var(--muted); font-size:.92rem; }
+  details { border:1px solid var(--line); border-radius:14px; padding:0; margin-top:18px; }
+  details summary { padding:14px 16px; font-weight:600; cursor:pointer; user-select:none; list-style:none; display:flex; justify-content:space-between; align-items:center; }
+  details summary::after { content:"▸"; font-size:.85rem; color:var(--muted); }
+  details[open] summary::after { content:"▾"; }
+  details .inner { padding:0 16px 16px; }
+  .reg-row { display:grid; grid-template-columns:80px 1fr 1fr; gap:8px; margin-bottom:8px; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:.85rem; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  td .del { background:none; border:none; color:var(--err); cursor:pointer; font-size:.9rem; padding:0 4px; width:auto; margin:0; }
+  .btn-row { display:flex; gap:8px; margin-top:10px; }
+  .btn-row button { margin:0; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
   label { display:block; font-size:.82rem; color:var(--muted); margin:10px 0 4px; }
   label:first-child { margin-top:0; }
@@ -74,10 +86,33 @@
   <button id="btnRead" class="secondary">Leer llavero (verificar)</button>
   <button id="btnClear" class="secondary">Limpiar formulario</button>
 
-  <p class="small" style="margin-top:18px">
+  <p class=”small” style=”margin-top:18px”>
     Tip: al pulsar “Grabar”, acerca el llavero a la parte trasera del celular (donde está la antena NFC) y espera la confirmación sin moverlo.
     Web NFC no puede bloquear el chip contra escritura; si quieres bloquearlo, hazlo con NFC Tools o NXP TagWriter.
   </p>
+
+  <details id=”logSection”>
+    <summary>Registro de llaveros entregados</summary>
+    <div class=”inner”>
+      <p class=”small” style=”margin:0 0 10px”>Registra a quién le entregaste cada llavero. Se guarda en este dispositivo.</p>
+      <div class=”reg-row”>
+        <div><label for=”rNum” style=”margin-top:0”>#&nbsp;Llavero</label><input id=”rNum” type=”number” min=”1” max=”200” placeholder=”1”></div>
+        <div><label for=”rNom” style=”margin-top:0”>Nombre</label><input id=”rNom” autocomplete=”off” placeholder=”Juan Pérez”></div>
+        <div><label for=”rEmp” style=”margin-top:0”>Empresa</label><input id=”rEmp” autocomplete=”off” placeholder=”Agencia”></div>
+      </div>
+      <button id=”btnReg” type=”button” style=”margin-top:6px”>Agregar al registro</button>
+      <div id=”logWrap” style=”display:none”>
+        <table id=”logTable”>
+          <thead><tr><th>#</th><th>Nombre</th><th>Empresa</th><th>Hora</th><th></th></tr></thead>
+          <tbody id=”logBody”></tbody>
+        </table>
+        <div class=”btn-row”>
+          <button id=”btnCSV” class=”secondary” type=”button”>Exportar CSV</button>
+          <button id=”btnClearLog” class=”secondary” type=”button”>Borrar todo</button>
+        </div>
+      </div>
+    </div>
+  </details>
 </main>
 
 <script>
@@ -168,6 +203,66 @@
     fields.forEach(id => $(id).value = "");
     setStatus("", ""); update();
   });
+
+  // --- Registro de llaveros ---
+  const STORE_KEY = "nfc_falcon_log";
+  let log = [];
+  try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); } catch(_) {}
+
+  function saveLog() { try { localStorage.setItem(STORE_KEY, JSON.stringify(log)); } catch(_) {} }
+
+  function renderLog() {
+    const body = $("logBody");
+    body.innerHTML = "";
+    log.forEach((e, i) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${e.num}</td><td>${e.nom}</td><td>${e.emp}</td><td>${e.ts}</td><td><button class="del" data-i="${i}" title="Eliminar">✕</button></td>`;
+      body.appendChild(tr);
+    });
+    $("logWrap").style.display = log.length ? "block" : "none";
+  }
+
+  $("logBody").addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".del");
+    if (!btn) return;
+    log.splice(+btn.dataset.i, 1);
+    saveLog(); renderLog();
+  });
+
+  $("btnReg").addEventListener("click", () => {
+    const num = $("rNum").value.trim();
+    if (!num) { $("rNum").focus(); return; }
+    const now = new Date();
+    const ts = now.toLocaleDateString("es-MX") + " " + now.toLocaleTimeString("es-MX", {hour:"2-digit", minute:"2-digit"});
+    log.push({ num, nom: $("rNom").value.trim() || $("nombre").value.trim() + " " + $("apellidos").value.trim(), emp: $("rEmp").value.trim() || $("empresa").value.trim(), ts });
+    saveLog(); renderLog();
+    $("rNum").value = ""; $("rNom").value = ""; $("rEmp").value = "";
+    $("logSection").open = true;
+  });
+
+  $("btnCSV").addEventListener("click", () => {
+    const rows = [["Llavero","Nombre","Empresa","Hora"], ...log.map(e => [e.num, e.nom, e.emp, e.ts])];
+    const csv = rows.map(r => r.map(v => `"${(v||"").replace(/"/g,'""')}"`).join(",")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = "data:text/csv;charset=utf-8,﻿" + encodeURIComponent(csv);
+    a.download = "llaveros_banregio.csv";
+    a.click();
+  });
+
+  $("btnClearLog").addEventListener("click", () => {
+    if (!confirm("¿Borrar todo el registro?")) return;
+    log = []; saveLog(); renderLog();
+  });
+
+  // Pre-fill reg fields from main form when opening the section
+  $("logSection").addEventListener("toggle", () => {
+    if ($("logSection").open) {
+      if (!$("rNom").value) $("rNom").value = [$("nombre").value, $("apellidos").value].filter(Boolean).join(" ");
+      if (!$("rEmp").value) $("rEmp").value = $("empresa").value;
+    }
+  });
+
+  renderLog();
 })();
 </script>
 </body>
